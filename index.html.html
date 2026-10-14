@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Service Timer</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--tx:#1d1d1b;--mut:#6b6a65;--ac:#2b5d8a;--act:#1e7a46;--bd:#dcdad2;--wr:#b3361f;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161615;--card:#222221;--tx:#efeee9;--mut:#a09f98;--ac:#6aa7da;--act:#4cc17f;--bd:#3a3a38;--wr:#ef7b66}}
+:root[data-theme="dark"]{--bg:#161615;--card:#222221;--tx:#efeee9;--mut:#a09f98;--ac:#6aa7da;--act:#4cc17f;--bd:#3a3a38;--wr:#ef7b66}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.4 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif}
+main{max-width:560px;margin:0 auto;padding:14px}
+h1{font-size:20px;margin:4px 0 2px}
+.sub{color:var(--mut);font-size:14px;margin-bottom:10px}
+.tabs{display:flex;gap:6px;margin:10px 0}
+.tabs button{flex:1;padding:10px;border:1px solid var(--bd);background:var(--card);color:var(--tx);border-radius:10px;font-size:15px}
+.tabs button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px;margin-bottom:10px}
+.row{display:flex;gap:8px;align-items:center}
+.item{display:flex;flex-direction:column;gap:6px}
+.item input{padding:10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);font-size:16px;width:100%}
+button.go{padding:14px;border:0;border-radius:10px;background:var(--ac);color:#fff;font-size:16px;font-weight:600;width:100%}
+button.go.active{background:var(--act)}
+button.go:disabled{opacity:.45}
+button.kids{background:#8a5a2b}
+button.shalom{background:var(--wr);font-size:18px;padding:16px}
+button.sm{padding:8px 12px;border:1px solid var(--bd);background:var(--card);color:var(--tx);border-radius:8px;font-size:14px}
+.mut{color:var(--mut);font-size:14px}
+.log div{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--bd);font-size:15px}
+.log div:last-child{border:0}
+.tot{font-variant-numeric:tabular-nums}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:6px 4px;border-bottom:1px solid var(--bd)}
+.scroll{overflow-x:auto}
+pre{white-space:pre-wrap;font:13px/1.4 ui-monospace,monospace;margin:8px 0 0}
+.warn{color:var(--wr);font-size:14px}
+label.chk{display:flex;gap:8px;align-items:center;font-size:15px}
+.tin{padding:8px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);font-size:16px}
+</style>
+</head>
+<body>
+<main>
+<h1>Service Timer</h1>
+<div class="sub" id="sub">Loading…</div>
+<div class="tabs"><button id="t-live" class="on">Live</button><button id="t-hist">History</button><button id="t-stats">Averages</button></div>
+<div id="view"></div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+const SUPABASE_URL='https://pxaoquxkudfbfsassmoi.supabase.co/rest/v1/';
+const SUPABASE_KEY='sb_publishable_FalXqpRONJQB7br_AvaF5w_m0gmAyUm';
+const ITEMS=[
+ {k:'music1',l:'Music Package 1',inp:'Who is leading music?'},
+ {k:'ann',l:'Announcements'},
+ {k:'special',l:'Special',inp:'What is it? (missionary, special song…)'},
+ {k:'music2',l:'Music Package 2'},
+ {k:'prayer',l:'Prayer',inp:'Who is praying?'},
+ {k:'communion',l:'Communion',comm:true},
+ {k:'sermon',l:'Sermon'}
+];
+const LBL=Object.fromEntries(ITEMS.map(i=>[i.k,i.l])); LBL.kids='Kids Service';
+let db=null, cur=null, svcs=[], tab='live', inputs={}, confirmKey=null, err='', editKey=null, canWrite=null;
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pad=n=>String(n).padStart(2,'0');
+const todayStr=()=>{const d=new Date();return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())};
+const isFirstSunday=()=>{const d=new Date();return d.getDay()===0&&d.getDate()<=7};
+const tm=ms=>ms?new Date(ms).toLocaleTimeString([], {hour:'numeric',minute:'2-digit',second:'2-digit'}):'—';
+const dur=s=>{if(s==null||isNaN(s))return '—';s=Math.round(s);return Math.floor(s/60)+':'+pad(s%60)};
+const dlabel=ds=>{const [y,m,d]=ds.split('-').map(Number);return new Date(y,m-1,d).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',year:'numeric'})};
+const freshCur=()=>({date:todayStr(),items:[],kids:null,end:null,communion:isFirstSunday()});
+const hasData=c=>c&&(c.items.length||c.kids||c.end);
+const tv=ms=>{const d=new Date(ms);return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds())};
+function parseT(v,ref){ if(!v)return null; const p=v.split(':').map(Number); const d=new Date(ref); d.setHours(p[0],p[1],p[2]||0,0); return d.getTime(); }
+
+async function save(){ try{const r=await sb.from('st_current').upsert({id:1,data:cur}); if(r.error)throw r.error; err=''}catch(e){err='Could not save: '+(e.message||'error')} render(); }
+
+function startItem(k){
+  const now=Date.now(), it=ITEMS.find(i=>i.k===k);
+  if(!cur||cur.end||cur.date!==todayStr()&&!hasData(cur)) cur=freshCur();
+  const last=cur.items[cur.items.length-1]; if(last&&!last.end) last.end=now;
+  cur.items.push({k,start:now,end:null,detail:(inputs[k]||'').trim()});
+  inputs[k]=''; save();
+}
+function startKids(){ if(cur.kids)return; cur.kids={start:Date.now()}; save(); }
+async function shalom(){
+  const now=Date.now(); const last=cur.items[cur.items.length-1]; if(last&&!last.end) last.end=now;
+  cur.end=now;
+  const items=cur.items.map(i=>({k:i.k,detail:i.detail||'',start:i.start,end:i.end,sec:(i.end-i.start)/1000}));
+  const rec={date:cur.date,communion:!!cur.communion,start:cur.items[0]?cur.items[0].start:now,end:now,items,
+    kids:cur.kids?{start:cur.kids.start,end:now,sec:(now-cur.kids.start)/1000}:null};
+  rec.totalSec=(rec.end-rec.start)/1000;
+  try{ let r=await sb.from('st_services').upsert({date:cur.date,data:rec}); if(r.error)throw r.error; const fresh=freshCur(); r=await sb.from('st_current').upsert({id:1,data:fresh}); if(r.error)throw r.error; cur=fresh; err=''; tab='live'; await loadServices(); }
+  catch(e){ err='Could not save service: '+(e.message||'error'); }
+  render();
+}
+function undo(){ if(!cur.items.length)return; cur.items.pop(); const l=cur.items[cur.items.length-1]; if(l)l.end=null; save(); }
+function discard(){ cur=freshCur(); confirmKey=null; save(); }
+function editLive(el){
+  const kids=!!el.dataset.livekids, n=+el.dataset.live;
+  const ms=parseT(el.value,kids?cur.kids.start:cur.items[n].start); if(ms==null)return render();
+  if(!kids){ const it=cur.items[n]; if((n>0&&ms<cur.items[n-1].start)||(it.end&&ms>it.end)){err='That time is out of order - not changed.';return render();} it.start=ms; if(n>0)cur.items[n-1].end=ms; }
+  else cur.kids.start=ms;
+  save();
+}
+function editSaved(el){
+  const s=JSON.parse(JSON.stringify(svcs.find(x=>x.date===el.dataset.es))), n=el.dataset.n;
+  const ref=n==='end'?s.end:n==='kids'?s.kids.start:s.items[+n].start; const ms=parseT(el.value,ref); if(ms==null)return render();
+  if(n==='end')s.end=ms; else if(n==='kids')s.kids.start=ms; else s.items[+n].start=ms;
+  s.items.forEach((i,k)=>{i.end=k<s.items.length-1?s.items[k+1].start:s.end;i.sec=(i.end-i.start)/1000});
+  if(s.items.length)s.start=s.items[0].start; s.totalSec=(s.end-s.start)/1000;
+  if(s.kids){s.kids.end=s.end;s.kids.sec=(s.end-s.kids.start)/1000}
+  if(s.items.some(i=>i.sec<0)||s.totalSec<0||(s.kids&&s.kids.sec<0)){err='That time is out of order - not saved.';return render();}
+  sb.from('st_services').upsert({date:s.date,data:s}).then(r=>{err=r.error?'Could not save edit':'';return loadServices()});
+}
+function editForm(s){
+  const r=(l,h)=>`<div class="row" style="justify-content:space-between;margin:6px 0"><span>${l}</span>${h}</div>`;
+  const inp=(n,ms)=>`<input type="time" step="1" class="tin" data-es="${esc(s.date)}" data-n="${n}" value="${tv(ms)}">`;
+  let h='<div class="mut">Change any time. Each item ends when the next one starts.</div>';
+  s.items.forEach((i,n)=>{h+=r(esc(LBL[i.k])+(i.detail?' · '+esc(i.detail):''),inp(n,i.start))});
+  if(s.kids)h+=r('Kids Service start',inp('kids',s.kids.start));
+  return h+r('Shalom (service end)',inp('end',s.end));
+}
+
+function summary(s){
+  let t=dlabel(s.date)+(s.communion?' (Communion)':'')+'\nStart '+tm(s.start)+' · End '+tm(s.end)+' · Total '+dur(s.totalSec)+'\n';
+  s.items.forEach(i=>{t+='\n'+LBL[i.k]+(i.detail?' ('+i.detail+')':'')+': '+tm(i.start)+' – '+tm(i.end)+' ['+dur(i.sec)+']'});
+  if(s.kids) t+='\nKids Service: '+tm(s.kids.start)+' – '+tm(s.kids.end)+' ['+dur(s.kids.sec)+']';
+  return t;
+}
+function copyText(t,btn){
+  const done=()=>{btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy',1500)};
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done,()=>fb())}else fb();
+  function fb(){const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();try{document.execCommand('copy');done()}catch(e){}a.remove()}
+}
+
+function liveView(){
+  const live=cur&&!cur.end?cur:null;
+  const active=live&&live.items.length?live.items[live.items.length-1]:null;
+  let h='';
+  if(live&&live.date!==todayStr()&&hasData(live)) h+=`<div class="card warn">Unfinished service from ${esc(dlabel(live.date))}. Press Shalom to save it, or discard it.</div>`;
+  h+=`<div class="card"><label class="chk"><input type="checkbox" id="comm" ${cur.communion?'checked':''}> Communion this Sunday${isFirstSunday()?' (first Sunday)':''}</label></div>`;
+  ITEMS.forEach(i=>{
+    if(i.comm&&!cur.communion)return;
+    const isAct=active&&active.k===i.k;
+    h+=`<div class="card item">${i.inp?`<input data-k="${i.k}" placeholder="${esc(i.inp)}" value="${esc(inputs[i.k]||'')}">`:''}
+    <button class="go ${isAct?'active':''}" data-start="${i.k}">${isAct?'● ':''}${esc(i.l)} — Start</button>
+    ${isAct?`<div class="mut tot">Running <span id="el">0:00</span>${active.detail?' · '+esc(active.detail):''}</div>`:''}</div>`;
+    if(i.k==='ann') h+=`<div class="card item"><button class="go kids ${cur.kids?'active':''}" data-kids="1" ${cur.kids?'disabled':''}>${cur.kids?'Kids Service started '+tm(cur.kids.start):'Kids Service — Start'}</button>${cur.kids?`<div class="row mut">Started at <input type="time" step="1" class="tin" data-livekids="1" value="${tv(cur.kids.start)}"></div>`:''}</div>`;
+  });
+  h+=`<div class="card item"><button class="go shalom" id="shalom" ${cur.items.length?'':'disabled'}>Shalom — End Service</button><div class="mut">Ends the current item and the Kids Service, then saves everything.</div></div>`;
+  if(cur.items.length){
+    h+='<div class="card log"><b>Today so far</b><div class="mut">Missed a tap? Change a start time here. The previous item ends when the next one starts.</div>';
+    cur.items.forEach((i,n)=>h+=`<div><span>${esc(LBL[i.k])}${i.detail?' · '+esc(i.detail):''}<br><span class="mut tot">${i.end?dur((i.end-i.start)/1000):'running'}</span></span><input type="time" step="1" class="tin" data-live="${n}" value="${tv(i.start)}"></div>`);
+    h+=`<div style="border:0"><button class="sm" id="undo">Undo last</button><button class="sm" id="disc">${confirmKey==='disc'?'Tap again to discard all':'Discard service'}</button></div></div>`;
+  }
+  return h;
+}
+function histView(){
+  if(!svcs.length) return '<div class="card mut">No completed services yet. They appear here after Shalom is pressed.</div>';
+  return svcs.map((s,idx)=>`<div class="card"><div class="row" style="justify-content:space-between"><b>${esc(dlabel(s.date))}</b><span class="tot">${dur(s.totalSec)}</span></div>
+  <details ${editKey===s.date?'open':''}><summary class="mut">Details</summary>${editKey===s.date?editForm(s):`<pre>${esc(summary(s))}</pre>`}<div class="row" style="margin-top:8px"><button class="sm" data-copy="${idx}">Copy</button><button class="sm" data-edit="${esc(s.date)}">${editKey===s.date?'Done editing':'Edit times'}</button><button class="sm" data-del="${esc(s.date)}">${confirmKey===s.date?'Tap again to delete':'Delete'}</button></div></details></div>`).join('');
+}
+function statsView(){
+  if(!svcs.length) return '<div class="card mut">Averages appear once at least one service has been recorded.</div>';
+  const agg={}; const add=(k,sec)=>{(agg[k]=agg[k]||[]).push(sec)};
+  svcs.forEach(s=>{s.items.forEach(i=>add(i.k,i.sec)); if(s.kids)add('kids',s.kids.sec); add('total',s.totalSec)});
+  const keys=[...ITEMS.map(i=>i.k),'kids','total'].filter(k=>agg[k]);
+  // per-item totals per service so averages reflect repeated items (e.g. two specials)
+  const per={}; svcs.forEach(s=>{const m={};s.items.forEach(i=>m[i.k]=(m[i.k]||0)+i.sec);Object.entries(m).forEach(([k,v])=>(per[k]=per[k]||[]).push(v))});
+  let h=`<div class="card scroll"><b>Averages across ${svcs.length} service${svcs.length>1?'s':''}</b><table><tr><th>Item</th><th>Avg</th><th>Min</th><th>Max</th><th>Times</th></tr>`;
+  keys.forEach(k=>{const a=k==='total'||k==='kids'?agg[k]:(per[k]||agg[k]);const avg=a.reduce((x,y)=>x+y,0)/a.length;
+    h+=`<tr><td>${k==='total'?'<b>Whole service</b>':esc(LBL[k])}</td><td class="tot">${dur(avg)}</td><td class="tot">${dur(Math.min(...a))}</td><td class="tot">${dur(Math.max(...a))}</td><td>${a.length}</td></tr>`});
+  h+='</table><div class="mut" style="margin-top:6px">Item times are per service (repeated items are added together).</div></div>';
+  // by item: each occurrence
+  h+='<div class="card scroll"><b>By service item</b>';
+  keys.filter(k=>k!=='total').forEach(k=>{
+    h+=`<div style="margin-top:8px"><b>${esc(LBL[k])}</b><table>`;
+    svcs.forEach(s=>{
+      if(k==='kids'){ if(s.kids)h+=`<tr><td>${esc(s.date)}</td><td></td><td class="tot">${dur(s.kids.sec)}</td></tr>`; }
+      else s.items.filter(i=>i.k===k).forEach(i=>h+=`<tr><td>${esc(s.date)}</td><td>${esc(i.detail)}</td><td class="tot">${dur(i.sec)}</td></tr>`);
+    });
+    h+='</table></div>';
+  });
+  return h+'</div>';
+}
+
+function render(){
+  if(!cur)return;
+  $('#sub').innerHTML=esc(dlabel(todayStr()))+(canWrite===false?' · <span class="warn">View only: you cannot record times</span>':canWrite?' · You can record times':'')+(err?` · <span class="warn">${esc(err)}</span>`:'');
+  ['live','hist','stats'].forEach(t=>$('#t-'+t).classList.toggle('on',tab===t));
+  const focused=document.activeElement&&document.activeElement.dataset?document.activeElement.dataset.k:null;
+  $('#view').innerHTML=tab==='live'?liveView():tab==='hist'?histView():statsView();
+  if(focused){const el=document.querySelector(`input[data-k="${focused}"]`);if(el){el.focus();}}
+  tick();
+}
+function tick(){ const el=$('#el'); if(el&&cur){const l=cur.items[cur.items.length-1]; if(l&&!l.end)el.textContent=dur((Date.now()-l.start)/1000)} }
+
+$('#t-live').onclick=()=>{tab='live';confirmKey=null;render()};
+$('#t-hist').onclick=()=>{tab='hist';confirmKey=null;render()};
+$('#t-stats').onclick=()=>{tab='stats';confirmKey=null;render()};
+$('#view').addEventListener('input',e=>{if(e.target.dataset.k)inputs[e.target.dataset.k]=e.target.value});
+$('#view').addEventListener('change',e=>{const d=e.target.dataset;
+  if(e.target.id==='comm'){cur.communion=e.target.checked;save()}
+  else if(d.live!==undefined||d.livekids)editLive(e.target);
+  else if(d.es)editSaved(e.target);});
+$('#view').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  if(b.dataset.start)return startItem(b.dataset.start);
+  if(b.dataset.kids)return startKids();
+  if(b.id==='shalom')return shalom();
+  if(b.dataset.link)return copyText(b.dataset.link,b);
+  if(b.id==='undo')return undo();
+  if(b.dataset.edit){editKey=editKey===b.dataset.edit?null:b.dataset.edit;return render();}
+  if(b.id==='disc'){ if(confirmKey==='disc')return discard(); confirmKey='disc'; return render(); }
+  if(b.dataset.copy!==undefined)return copyText(summary(svcs[+b.dataset.copy]),b);
+  if(b.dataset.del){ if(confirmKey===b.dataset.del){ confirmKey=null; sb.from('st_services').delete().eq('date',b.dataset.del).then(r=>{if(r.error)err='Could not delete';return loadServices()}); } else {confirmKey=b.dataset.del;render();} }
+});
+setInterval(tick,1000);
+
+let sb=null;
+async function loadServices(){ const r=await sb.from('st_services').select('date,data').order('date',{ascending:false}); if(r.error){err='Could not load: '+r.error.message}else{svcs=r.data.map(x=>x.data)} render(); }
+async function loadCurrent(){ const r=await sb.from('st_current').select('data').eq('id',1).maybeSingle(); if(r.error){err='Could not load: '+r.error.message}else if(r.data&&r.data.data){const d=r.data.data; d.items=d.items||[]; cur=d}else cur=freshCur(); render(); }
+(async()=>{
+  cur=freshCur(); render();
+  if(SUPABASE_URL.startsWith('PASTE')){ $('#view').innerHTML='<div class="card warn">Add your Supabase URL and key at the top of the script.</div>'; return; }
+  sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+  await loadCurrent(); await loadServices();
+  sb.channel('st').on('postgres_changes',{event:'*',schema:'public',table:'st_current'},loadCurrent).on('postgres_changes',{event:'*',schema:'public',table:'st_services'},loadServices).subscribe();
+  setInterval(loadCurrent,20000);
+})();
+</script>
+</body>
+</html>
