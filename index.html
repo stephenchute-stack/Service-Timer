@@ -45,6 +45,7 @@ label.chk{display:flex;gap:8px;align-items:center;font-size:15px}
 <h1>Service Timer</h1>
 <div class="sub" id="sub">Loading…</div>
 <div class="tabs"><button id="t-live" class="on">Live</button><button id="t-hist">History</button><button id="t-stats">Averages</button></div>
+<div style="text-align:right"><button class="sm" id="out" style="display:none">Sign out</button></div>
 <div id="view"></div>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
@@ -61,7 +62,7 @@ const ITEMS=[
  {k:'sermon',l:'Sermon'}
 ];
 const LBL=Object.fromEntries(ITEMS.map(i=>[i.k,i.l])); LBL.kids='Kids Service';
-let db=null, cur=null, svcs=[], tab='live', inputs={}, confirmKey=null, err='', editKey=null, canWrite=null;
+let db=null, cur=null, svcs=[], tab='live', inputs={}, confirmKey=null, err='', editKey=null, canWrite=null, addOpen=false, addDraft=null;
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const pad=n=>String(n).padStart(2,'0');
@@ -158,7 +159,43 @@ function liveView(){
   }
   return h;
 }
-function histView(){
+function newDraft(){return {date:'',communion:false,kids:'',end:'',msg:'',rows:ITEMS.filter(i=>!i.comm).map(i=>({k:i.k,detail:'',t:''}))}}
+function updDraft(el){ const a=el.dataset.ad,d=addDraft; if(a==='date')d.date=el.value; else if(a==='comm')d.communion=el.checked; else if(a==='kids')d.kids=el.value; else if(a==='end')d.end=el.value; else if(a==='row')d.rows[+el.dataset.n][el.dataset.f]=el.value; }
+function addForm(){
+  const d=addDraft;
+  let h=`<div class="card item"><b>Add a past service</b><div class="mut">Enter the clock times from your notes. Leave a row's time empty to skip it. Each item ends when the next one starts.</div>
+  <label class="mut">Date</label><input type="date" class="tin" data-ad="date" data-fid="ad-date" value="${esc(d.date)}">
+  <label class="chk"><input type="checkbox" style="width:auto" data-ad="comm" ${d.communion?'checked':''}> Communion that day</label>`;
+  d.rows.forEach((r,n)=>{
+    h+=`<div style="border-top:1px solid var(--bd);padding-top:8px;display:flex;flex-direction:column;gap:6px"><div class="row"><select class="tin" style="flex:1" data-ad="row" data-f="k" data-n="${n}" data-fid="ad-k${n}">${ITEMS.map(i=>`<option value="${i.k}" ${r.k===i.k?'selected':''}>${esc(i.l)}</option>`).join('')}</select><input type="time" class="tin" style="flex:1" data-ad="row" data-f="t" data-n="${n}" data-fid="ad-t${n}" value="${esc(r.t)}"><button class="sm" data-adrm="${n}">✕</button></div><input class="tin" placeholder="Name / note (optional)" data-ad="row" data-f="detail" data-n="${n}" data-fid="ad-d${n}" value="${esc(r.detail)}"></div>`;
+  });
+  h+=`<button class="sm" data-addrow="1">+ Add another item</button>
+  <label class="mut">Kids Service start (optional)</label><input type="time" class="tin" data-ad="kids" data-fid="ad-kids" value="${esc(d.kids)}">
+  <label class="mut">Shalom (service end)</label><input type="time" class="tin" data-ad="end" data-fid="ad-end" value="${esc(d.end)}">
+  <div class="warn">${esc(d.msg||'')}</div>
+  <button class="go" data-adsave="1">Save past service</button><button class="sm" data-adcancel="1">Cancel</button></div>`;
+  return h;
+}
+async function saveManual(){
+  const d=addDraft; const fail=m=>{d.msg=m;render()};
+  if(!d.date)return fail('Pick the date.');
+  if(svcs.some(x=>x.date===d.date))return fail('A service for that date is already saved. Delete it first, or use Edit times on it.');
+  const [y,mo,dd]=d.date.split('-').map(Number);
+  const ms=t=>{if(!t)return null;const p=t.split(':').map(Number);return new Date(y,mo-1,dd,p[0],p[1],p[2]||0,0).getTime()};
+  const rows=d.rows.filter(r=>r.t).map(r=>({k:r.k,detail:(r.detail||'').trim(),start:ms(r.t)})).sort((a,b)=>a.start-b.start);
+  const end=ms(d.end);
+  if(!rows.length)return fail('Enter at least one start time.');
+  if(!end)return fail('Enter the Shalom (end) time.');
+  if(end<=rows[rows.length-1].start)return fail('The end time must be after the last start time.');
+  const kids=ms(d.kids); if(kids&&(kids<rows[0].start||kids>=end))return fail('Kids Service start should be between the first start and the end.');
+  const items=rows.map((r,i)=>{const e=i<rows.length-1?rows[i+1].start:end;return {k:r.k,detail:r.detail,start:r.start,end:e,sec:(e-r.start)/1000}});
+  const rec={date:d.date,communion:!!d.communion,start:items[0].start,end:end,items:items,kids:kids?{start:kids,end:end,sec:(end-kids)/1000}:null,totalSec:(end-items[0].start)/1000};
+  const r=await sb.from('st_services').upsert({date:d.date,data:rec});
+  if(r.error)return fail('Could not save: '+r.error.message);
+  addOpen=false; err=''; await loadServices();
+}
+function histView(){ return (addOpen?addForm():'<button class="go" data-addopen="1" style="margin-bottom:10px">+ Add a past service</button>')+histList(); }
+function histList(){
   if(!svcs.length) return '<div class="card mut">No completed services yet. They appear here after Shalom is pressed.</div>';
   return svcs.map((s,idx)=>`<div class="card"><div class="row" style="justify-content:space-between"><b>${esc(dlabel(s.date))}</b><span class="tot">${dur(s.totalSec)}</span></div>
   <details ${editKey===s.date?'open':''}><summary class="mut">Details</summary>${editKey===s.date?editForm(s):`<pre>${esc(summary(s))}</pre>`}<div class="row" style="margin-top:8px"><button class="sm" data-copy="${idx}">Copy</button><button class="sm" data-edit="${esc(s.date)}">${editKey===s.date?'Done editing':'Edit times'}</button><button class="sm" data-del="${esc(s.date)}">${confirmKey===s.date?'Tap again to delete':'Delete'}</button></div></details></div>`).join('');
@@ -189,6 +226,7 @@ function statsView(){
 
 function render(){
   if(!cur)return;
+  const ae=document.activeElement; if(tab==='hist'&&addOpen&&ae&&(ae.tagName==='INPUT'||ae.tagName==='SELECT')&&ae.dataset.ad)return;
   $('#sub').innerHTML=esc(dlabel(todayStr()))+(canWrite===false?' · <span class="warn">View only: you cannot record times</span>':canWrite?' · You can record times':'')+(err?` · <span class="warn">${esc(err)}</span>`:'');
   ['live','hist','stats'].forEach(t=>$('#t-'+t).classList.toggle('on',tab===t));
   const focused=document.activeElement&&document.activeElement.dataset?document.activeElement.dataset.k:null;
@@ -201,13 +239,20 @@ function tick(){ const el=$('#el'); if(el&&cur){const l=cur.items[cur.items.leng
 $('#t-live').onclick=()=>{tab='live';confirmKey=null;render()};
 $('#t-hist').onclick=()=>{tab='hist';confirmKey=null;render()};
 $('#t-stats').onclick=()=>{tab='stats';confirmKey=null;render()};
-$('#view').addEventListener('input',e=>{if(e.target.dataset.k)inputs[e.target.dataset.k]=e.target.value});
+$('#view').addEventListener('input',e=>{if(e.target.dataset.k)inputs[e.target.dataset.k]=e.target.value; if(e.target.dataset.ad)updDraft(e.target)});
 $('#view').addEventListener('change',e=>{const d=e.target.dataset;
   if(e.target.id==='comm'){cur.communion=e.target.checked;save()}
   else if(d.live!==undefined||d.livekids)editLive(e.target);
-  else if(d.es)editSaved(e.target);});
+  else if(d.es)editSaved(e.target);
+  else if(d.ad)updDraft(e.target);});
 $('#view').addEventListener('click',e=>{
   const b=e.target.closest('button'); if(!b)return;
+  if(b.dataset.addopen){addOpen=true;addDraft=newDraft();return render();}
+  if(b.dataset.adcancel||b.dataset.addrow||b.dataset.adrm!==undefined||b.dataset.adsave){ if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
+    if(b.dataset.adcancel){addOpen=false;return render();}
+    if(b.dataset.addrow){addDraft.rows.push({k:'music1',detail:'',t:''});return render();}
+    if(b.dataset.adrm!==undefined){addDraft.rows.splice(+b.dataset.adrm,1);if(!addDraft.rows.length)addDraft.rows.push({k:'music1',detail:'',t:''});return render();}
+    return saveManual(); }
   if(b.dataset.start)return startItem(b.dataset.start);
   if(b.dataset.kids)return startKids();
   if(b.id==='shalom')return shalom();
@@ -223,13 +268,20 @@ setInterval(tick,1000);
 let sb=null;
 async function loadServices(){ const r=await sb.from('st_services').select('date,data').order('date',{ascending:false}); if(r.error){err='Could not load: '+r.error.message}else{svcs=r.data.map(x=>x.data)} render(); }
 async function loadCurrent(){ const r=await sb.from('st_current').select('data').eq('id',1).maybeSingle(); if(r.error){err='Could not load: '+r.error.message}else if(r.data&&r.data.data){const d=r.data.data; d.items=d.items||[]; cur=d}else cur=freshCur(); render(); }
+function showLogin(msg){
+  $('#view').innerHTML=`<div class="card item"><b>Sign in</b><input id="le" type="email" placeholder="Email" autocomplete="username"><input id="lp" type="password" placeholder="Password" autocomplete="current-password"><button class="go" id="lgo">Sign in</button><div class="warn">${esc(msg||'')}</div></div>`;
+  $('#lgo').onclick=async()=>{ const r=await sb.auth.signInWithPassword({email:$('#le').value.trim(),password:$('#lp').value}); if(r.error)return showLogin('Wrong email or password.'); start(); };
+}
+async function start(){
+  await loadCurrent(); await loadServices();
+  sb.channel('st').on('postgres_changes',{event:'*',schema:'public',table:'st_current'},loadCurrent).on('postgres_changes',{event:'*',schema:'public',table:'st_services'},loadServices).subscribe();
+  setInterval(loadCurrent,20000);
+}
 (async()=>{
   cur=freshCur(); render();
   if(SUPABASE_URL.startsWith('PASTE')){ $('#view').innerHTML='<div class="card warn">Add your Supabase URL and key at the top of the script.</div>'; return; }
   sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
-  await loadCurrent(); await loadServices();
-  sb.channel('st').on('postgres_changes',{event:'*',schema:'public',table:'st_current'},loadCurrent).on('postgres_changes',{event:'*',schema:'public',table:'st_services'},loadServices).subscribe();
-  setInterval(loadCurrent,20000);
+  start();
 })();
 </script>
 </body>
