@@ -62,7 +62,7 @@ const ITEMS=[
  {k:'sermon',l:'Sermon'}
 ];
 const LBL=Object.fromEntries(ITEMS.map(i=>[i.k,i.l])); LBL.kids='Kids Service';
-let db=null, cur=null, svcs=[], tab='live', inputs={}, confirmKey=null, err='', editKey=null, canWrite=null, addOpen=false, addDraft=null;
+let db=null, cur=null, svcs=[], tab='live', inputs={}, confirmKey=null, err='', editKey=null, canWrite=null, addOpen=false, addDraft=null, extra={};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const pad=n=>String(n).padStart(2,'0');
@@ -78,12 +78,12 @@ function parseT(v,ref){ if(!v)return null; const p=v.split(':').map(Number); con
 
 async function save(){ try{const r=await sb.from('st_current').upsert({id:1,data:cur}); if(r.error)throw r.error; err=''}catch(e){err='Could not save: '+(e.message||'error')} render(); }
 
-function startItem(k){
+function startItem(k,n){
   const now=Date.now(), it=ITEMS.find(i=>i.k===k);
   if(!cur||cur.end||cur.date!==todayStr()&&!hasData(cur)) cur=freshCur();
   const last=cur.items[cur.items.length-1]; if(last&&!last.end) last.end=now;
-  cur.items.push({k,start:now,end:null,detail:(inputs[k]||'').trim()});
-  inputs[k]=''; save();
+  const ik=n?k+'#'+n:k; cur.items.push({k,line:n||0,start:now,end:null,detail:(inputs[ik]||'').trim()});
+  inputs[ik]=''; save();
 }
 function startKids(){ if(cur.kids)return; cur.kids={start:Date.now()}; save(); }
 async function shalom(){
@@ -93,7 +93,7 @@ async function shalom(){
   const rec={date:cur.date,communion:!!cur.communion,start:cur.items[0]?cur.items[0].start:now,end:now,items,
     kids:cur.kids?{start:cur.kids.start,end:now,sec:(now-cur.kids.start)/1000}:null};
   rec.totalSec=(rec.end-rec.start)/1000;
-  try{ let r=await sb.from('st_services').upsert({date:cur.date,data:rec}); if(r.error)throw r.error; const fresh=freshCur(); r=await sb.from('st_current').upsert({id:1,data:fresh}); if(r.error)throw r.error; cur=fresh; err=''; tab='live'; await loadServices(); }
+  try{ let r=await sb.from('st_services').upsert({date:cur.date,data:rec}); if(r.error)throw r.error; const fresh=freshCur(); r=await sb.from('st_current').upsert({id:1,data:fresh}); if(r.error)throw r.error; cur=fresh; extra={}; err=''; tab='live'; await loadServices(); }
   catch(e){ err='Could not save service: '+(e.message||'error'); }
   render();
 }
@@ -145,10 +145,14 @@ function liveView(){
   h+=`<div class="card"><label class="chk"><input type="checkbox" id="comm" ${cur.communion?'checked':''}> Communion this Sunday${isFirstSunday()?' (first Sunday)':''}</label></div>`;
   ITEMS.forEach(i=>{
     if(i.comm&&!cur.communion)return;
-    const isAct=active&&active.k===i.k;
-    h+=`<div class="card item">${i.inp?`<input data-k="${i.k}" placeholder="${esc(i.inp)}" value="${esc(inputs[i.k]||'')}">`:''}
-    <button class="go ${isAct?'active':''}" data-start="${i.k}">${isAct?'● ':''}${esc(i.l)} — ${cur.items.some(x=>x.k===i.k)?'Start another':'Start'}</button>
-    ${isAct?`<div class="mut tot">Running <span id="el">0:00</span>${active.detail?' · '+esc(active.detail):''}</div>`:''}</div>`;
+    const multi=(i.k==='ann'||i.k==='special'), lines=multi?(extra[i.k]||0)+1:1;
+    for(let n=0;n<lines;n++){
+      const ik=n?i.k+'#'+n:i.k, isAct=active&&active.k===i.k&&(active.line||0)===n;
+      h+=`<div class="card item">${i.inp?`<input data-k="${ik}" placeholder="${esc(i.inp)}" value="${esc(inputs[ik]||'')}">`:''}
+      <button class="go ${isAct?'active':''}" data-start="${i.k}" data-line="${n}">${isAct?'● ':''}${esc(i.l)}${n?' '+(n+1):''} — Start</button>
+      ${isAct?`<div class="mut tot">Running <span id="el">0:00</span>${active.detail?' · '+esc(active.detail):''}</div>`:''}</div>`;
+    }
+    if(multi) h+=`<div style="margin:-4px 0 10px"><button class="sm" data-plus="${i.k}">+ Add another ${i.k==='ann'?'announcement':'special'}</button></div>`;
     if(i.k==='ann') h+=`<div class="card item"><button class="go kids ${cur.kids?'active':''}" data-kids="1" ${cur.kids?'disabled':''}>${cur.kids?'Kids Service started '+tm(cur.kids.start):'Kids Service — Start'}</button>${cur.kids?`<div class="row mut">Started at <input type="time" step="1" class="tin" data-livekids="1" value="${tv(cur.kids.start)}"></div>`:''}</div>`;
   });
   h+=`<div class="card item"><button class="go shalom" id="shalom" ${cur.items.length?'':'disabled'}>Shalom — End Service</button><div class="mut">Ends the current item and the Kids Service, then saves everything.</div></div>`;
@@ -253,7 +257,8 @@ $('#view').addEventListener('click',e=>{
     if(b.dataset.addrow){addDraft.rows.push({k:'music1',detail:'',t:''});return render();}
     if(b.dataset.adrm!==undefined){addDraft.rows.splice(+b.dataset.adrm,1);if(!addDraft.rows.length)addDraft.rows.push({k:'music1',detail:'',t:''});return render();}
     return saveManual(); }
-  if(b.dataset.start)return startItem(b.dataset.start);
+  if(b.dataset.plus){extra[b.dataset.plus]=(extra[b.dataset.plus]||0)+1;return render();}
+  if(b.dataset.start)return startItem(b.dataset.start,+b.dataset.line||0);
   if(b.dataset.kids)return startKids();
   if(b.id==='shalom')return shalom();
   if(b.dataset.link)return copyText(b.dataset.link,b);
