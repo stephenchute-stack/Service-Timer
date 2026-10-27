@@ -54,7 +54,7 @@ const SUPABASE_URL='https://pxaoquxkudfbfsassmoi.supabase.co';
 const SUPABASE_KEY='sb_publishable_FalXqpRONJQB7br_AvaF5w_m0gmAyUm';
 const ITEMS=[
  {k:'music1',l:'Music Package 1',inp:'Who is leading music?'},
- {k:'ann',l:'Announcements'},
+ {k:'ann',l:'Announcements',inp:'What is it? (optional)'},
  {k:'special',l:'Special',inp:'What is it? (missionary, special song…)'},
  {k:'music2',l:'Music Package 2'},
  {k:'prayer',l:'Prayer',inp:'Who is praying?'},
@@ -147,7 +147,7 @@ function liveView(){
     if(i.comm&&!cur.communion)return;
     const isAct=active&&active.k===i.k;
     h+=`<div class="card item">${i.inp?`<input data-k="${i.k}" placeholder="${esc(i.inp)}" value="${esc(inputs[i.k]||'')}">`:''}
-    <button class="go ${isAct?'active':''}" data-start="${i.k}">${isAct?'● ':''}${esc(i.l)} — Start</button>
+    <button class="go ${isAct?'active':''}" data-start="${i.k}">${isAct?'● ':''}${esc(i.l)} — ${cur.items.some(x=>x.k===i.k)?'Start another':'Start'}</button>
     ${isAct?`<div class="mut tot">Running <span id="el">0:00</span>${active.detail?' · '+esc(active.detail):''}</div>`:''}</div>`;
     if(i.k==='ann') h+=`<div class="card item"><button class="go kids ${cur.kids?'active':''}" data-kids="1" ${cur.kids?'disabled':''}>${cur.kids?'Kids Service started '+tm(cur.kids.start):'Kids Service — Start'}</button>${cur.kids?`<div class="row mut">Started at <input type="time" step="1" class="tin" data-livekids="1" value="${tv(cur.kids.start)}"></div>`:''}</div>`;
   });
